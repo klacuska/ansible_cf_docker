@@ -1,0 +1,113 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+
+  "Description": "Template for creation of one server used with Ansible",
+
+  "Parameters": {
+    "EC2Key": {
+      "Description": "SSH key name for access to EC2 Instance",
+      "Type": "AWS::EC2::KeyPair::KeyName",
+      "ConstraintDescription": "cf_key-ansible"
+    }
+  },
+
+  "Resources": {
+    "DockerVPC": {
+      "Type": "AWS::EC2::VPC",
+      "Properties": {
+        "CidrBlock": "10.0.0.0/16",
+        "EnableDnsSupport": "true",
+        "EnableDnsHostnames": "true",
+        "InstanceTenancy": "default",
+        "Tags": [ { "Key" : "Name", "Value" : "DockerVPC"} ]
+      }
+    },
+    "PubSubnet1": {
+      "Type": "AWS::EC2::Subnet",
+      "Properties": {
+        "CidrBlock": "10.0.0.0/24",
+        "MapPublicIpOnLaunch": "true",
+        "Tags": [ { "Key" : "Name", "Value" : "Public Subnet 1"}],
+        "VpcId": { "Ref": "DockerVPC"},
+        "AvailabilityZone": {
+          "Fn::Select" : [ "0", { "Fn::GetAZs" : "" } ]
+        }
+      }
+    },
+    "IGDockerVPC": {
+      "Type": "AWS::EC2::InternetGateway",
+      "Properties": {
+        "Tags": [ { "Key" : "Name" , "Value" : "IG for DockerVPC" } ]
+      }
+    },
+    "AttachIG": {
+      "Type": "AWS::EC2::VPCGatewayAttachment",
+      "Properties": {
+        "InternetGatewayId": { "Ref": "IGDockerVPC"},
+        "VpcId": { "Ref": "DockerVPC" }
+      }
+    },
+    "PubSubRT": {
+      "Type" : "AWS::EC2::RouteTable",
+      "Properties": {
+        "VpcId": { "Ref": "DockerVPC" },
+        "Tags": [ { "Key" : "Name", "Value" : "PubSubRT" } ]
+      }
+    },
+    "AddRouteToInternet": {
+      "Type" : "AWS::EC2::Route",
+      "DependsOn": "AttachIG",
+      "Properties": {
+        "DestinationCidrBlock": "0.0.0.0/0",
+        "GatewayId": { "Ref": "IGDockerVPC" },
+        "RouteTableId": { "Ref": "PubSubRT" }
+      }
+    },
+    "AttachPSRTtoPubSub1": {
+      "Type" : "AWS::EC2::SubnetRouteTableAssociation",
+      "Properties": {
+        "RouteTableId": { "Ref": "PubSubRT" },
+        "SubnetId": { "Ref": "PubSubnet1" }
+      }
+    },
+    "SGExercise": {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "VpcId": { "Ref": "DockerVPC" },
+        "GroupName": "DockerVPC-SGExercise",
+        "GroupDescription": "Security Group allowing SSH connection from everywhere",
+        "Tags": [ { "Key" : "Name", "Value" : "DockerVPC-SGExercise" } ],
+        "SecurityGroupIngress": [ {
+          "Description": "Allow SSH from everywhere",
+          "CidrIp": "0.0.0.0/0",
+          "FromPort": "22",
+          "ToPort": "22",
+          "IpProtocol": "tcp"
+          } ]
+      }
+    },
+    "KarolL": {
+      "Type": "AWS::EC2::Instance",
+      "Properties": {
+        "ImageId": "ami-c7e0c82c",
+        "InstanceType": "t2.micro",
+        "KeyName": { "Ref": "EC2Key" },
+        "SecurityGroupIds": [ { "Ref": "SGExercise" } ],
+        "SubnetId": { "Ref": "PubSubnet1" },
+        "Tags": [ { "Key" : "Name", "Value" : "KarolL" } ]
+      }
+    }
+  },
+
+  "Outputs": {
+    "PublicIp": {
+      "Value": { "Fn::Join" : [
+         "", [
+            "['",
+            { "Fn::GetAtt" : [ "KarolL", "PublicIp" ] },
+            "']"
+            ]  ] },
+      "Description": "Public IP addresses of server"
+    }
+  }
+}
