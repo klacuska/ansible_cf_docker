@@ -1,0 +1,184 @@
+### Part 1 - create environment from CloudFormation template
+
+- hosts: localhost
+  connection: local
+  gather_facts: False 
+
+  tasks:
+   - name: create new ssh key pair
+     ec2_key:
+       name: cf_key-ansible
+       region: eu-central-1
+     register: keypair
+
+   - name: save the key
+     copy:
+       dest: /ansible/cf_key-ansible.pem
+       content: "{{ keypair.key.private_key }}"
+       mode: 0400
+     when: keypair.changed
+
+   - name: create CloudFormation stack
+     cloudformation:
+       stack_name: DockerVPC
+       state: present
+       region: eu-central-1
+       template: /ansible/AWS-machine_creation.json
+       template_parameters:
+         EC2Key: cf_key-ansible
+     register: cf_output
+
+   - name: add the host to inventory
+     add_host:
+       name: "{{ item }}"
+       groups: aws_server
+       ansible_user: ubuntu
+       ansible_ssh_private_key_file: /ansible/cf_key-ansible.pem
+     with_items: cf_output.stack_outputs.PublicIp
+
+### Part 2 - install Docker
+
+- hosts: aws_server
+  become: yes
+  gather_facts: False 
+
+  tasks:
+   - name: wait for SSH to be up
+     local_action: wait_for port=22 host="{{inventory_hostname}}" search_regex=OpenSSH delay=5
+     become: no
+
+   - name: because of Ubuntu 16.04 which has Python3 primarily only, python2.7 has to be installed additionaly for possibilities to get Ansible work correctly in connection to remote node - registering required commands
+     shell: echo "apt-get update && sudo apt-get install ansible -y" > /tmp/ansible_installation-remote
+     delegate_to: 127.0.0.1
+
+   - shell: echo "{{groups['aws_server']}}" > /tmp/host
+     run_once: true
+     delegate_to: localhost
+
+   - shell: cat /tmp/host | cut -d "'" -f2 > /tmp/host_parsed
+     run_once: true
+     delegate_to: localhost
+
+   - name: installing proper version of python
+     shell: ssh -i "/ansible/cf_key-ansible.pem" -o StrictHostKeyChecking=no `cat /tmp/host_parsed` sudo 'bash -s' < /tmp/ansible_installation-remote
+     become: no
+     delegate_to: localhost
+
+   - name: copying nginx conf for container
+     template:
+       src: nginx.conf.tbu
+       dest: /home/ubuntu/nginx.conf
+
+   - name: installing lynx
+     command: apt-get install lynx -y
+
+   - name: installing docker packages
+     command: apt-get install docker -y
+   - command: apt-get install docker-compose -y
+
+   - name: enable syslog logging driver
+     shell: echo "{" > /etc/docker/daemon.json
+   - lineinfile:
+       dest: /etc/docker/daemon.json
+       state: present
+       insertafter: '{'
+       line: '  "log-driver": "syslog"'
+   - lineinfile:
+       dest: /etc/docker/daemon.json
+       state: present
+       insertafter: '  "log-driver": "syslog"'
+       line: '}'
+
+   - name: starting docker service
+     command: systemctl unmask docker.service
+   - command: systemctl unmask docker.socket     
+   - command: systemctl restart docker.service
+
+   - name: copying Dockerfile to newly created server
+     copy:
+       src: /ansible/dockerfile
+       dest: /home/ubuntu/Dockerfile
+
+   - name: copying index.html to newly created server
+     copy:
+       src: /ansible/index.html
+       dest: /home/ubuntu/index.html
+
+   - name: building docker image from Dockerfile
+     docker_image: >
+       name=football
+       path=/home/ubuntu/
+       state=present
+
+   - name: launching Docker container
+     docker:
+       name: FootballContainer
+       image: "football"
+       state: reloaded
+       publish_all_ports: yes
+
+
+### Part 3 - add user interviewer - pass: CheckME-amIworking?7
+
+   - name: add user interviewer
+     user:
+       name: interviewer
+       createhome: yes
+       state: present
+       password: $6$b1R5ejRM$TXguvMwHOUc.FoAT1qUqJPeZ.AAjQwGdsi9Mf/MGdei0j9/6b1fUowXIVD/tNEqPK3Fzy3XFqcNGgLLKp9PD/0
+
+   - name: set interviewer user to be able to use a sudo to root
+     lineinfile:
+       dest: /etc/sudoers
+       state: present
+       insertafter: '^root'
+       line: 'interviewer ALL=(ALL)      NOPASSWD: ALL'
+       validate: '/usr/sbin/visudo -cf %s'
+
+   - name: allow user to log in with password
+     lineinfile:
+       dest: /etc/ssh/sshd_config
+       state: present
+       regexp: '^PasswordAuthentication'
+       line: 'PasswordAuthentication yes'
+     register: update_ssh_conf
+
+   - name: reload sshd if config has changed
+     service:
+       name: sshd
+       state: reloaded
+     when: update_ssh_conf is changed
+
+
+### Part 4 - copy script for network scanning and install Nmap tool & copy and install adiitional packages for future python operations
+   
+   - name: copying scan.sh
+     copy:
+       src: /ansible/script.sh
+       dest: /home/ubuntu/scan.sh
+       mode: 0755
+
+   - name: install nmap tool
+     command: apt-get install nmap -y
+
+   - name: copy pyown package
+     copy:
+       src: /tmp/pyowm-2.8.0-py2.7.egg
+       dest: /tmp/pyowm-2.8.0-py2.7.egg
+       mode: 0644
+
+   - name: installation of additional python related packages
+     command: apt-get install virtualenv -y 
+   - command: apt-get install python-pip -y
+   - command: apt-get install python-boto -y
+   - command: pip install --upgrade pip==9.0.3
+
+
+### Part 5 configure syslog on newly cerated server via roles
+
+- hosts: aws_server
+  become: yes
+  gather_facts: False
+
+  roles:
+   - role: syslog
