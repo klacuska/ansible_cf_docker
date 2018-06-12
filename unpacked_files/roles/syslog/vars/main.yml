@@ -1,6 +1,0 @@
-rsyslog_apps:
-      - name: custom 
-        priority: 55 
-        lines:
-          - "local0.* -/var/log/custom.log"
-          - "*.notice @127.0.0.1:514"
