@@ -1,4 +1,0 @@
-rsyslog_klog_permit_non_kernel_facility: "on"
-rsyslog_udp_enable: true
-rsyslog_udp_address: 127.0.0.1
-rsyslog_udp_port: 514
